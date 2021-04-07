@@ -1,0 +1,11 @@
+Built-In Commands
+___________________________________________________________________________________________________________________________________________________
+
+[   ]   cls     -   clear screen , no arguments
+[   ]   cd      -   change directory , 1 arguments only , 'cd name'
+[   ]   pwd     -   print working directory , no arguments
+[   ]   ls      -   list files , some flags , 'ls flags'
+[   ]   ren     -   rename file or folder , 2 arguments , 'ren name newname'
+[   ]   del     -   removes file or folder (content inside too) , more than 2 arguments , 'del file1 file2 ...'
+[   ]   mkdir   -   make folder , 2 arguments , 'mkdir name'
+___________________________________________________________________________________________________________________________________________________
