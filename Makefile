@@ -1,93 +1,60 @@
-#
-#  Copyright (C) 1999-2001 Hewlett-Packard Co.
-#	Contributed by David Mosberger <davidm@hpl.hp.com>
-#	Contributed by Stephane Eranian <eranian@hpl.hp.com>
-#
-#    All rights reserved.
-#
-#    Redistribution and use in source and binary forms, with or without
-#    modification, are permitted provided that the following conditions
-#    are met:
-#
-#    * Redistributions of source code must retain the above copyright
-#      notice, this list of conditions and the following disclaimer.
-#    * Redistributions in binary form must reproduce the above
-#      copyright notice, this list of conditions and the following
-#      disclaimer in the documentation and/or other materials
-#      provided with the distribution.
-#    * Neither the name of Hewlett-Packard Co. nor the names of its
-#      contributors may be used to endorse or promote products derived
-#      from this software without specific prior written permission.
-#
-#    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
-#    CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
-#    INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-#    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-#    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
-#    BE LIABLE FOR ANYDIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
-#    OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-#    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-#    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-#    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
-#    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-#    THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-#    SUCH DAMAGE.
-#
 
-SRCDIR = .
+OSNAME = CustomOS
 
-VPATH = $(SRCDIR)
+GNUEFI = ../gnu-efi
+OVMFDIR = ../OVMFbin
+LDS = link.ld
+CC = gcc
+ASMC = nasm
+LD = ld
 
-include $(SRCDIR)/../Make.defaults
+CFLAGS = -ffreestanding -fshort-wchar -mno-red-zone -Wno-write-strings
+ASMFLAGS = 
+LDFLAGS = -T $(LDS) -static -Bsymbolic -nostdlib
 
-TOPDIR = $(SRCDIR)/..
+SRCDIR := src
+OBJDIR := lib
+BUILDDIR = bin
+BOOTEFI := $(GNUEFI)/x86_64/bootloader/main.efi
 
-CDIR=$(TOPDIR)/..
-LINUX_HEADERS	= /usr/src/sys/build
-CPPFLAGS	+= -D__KERNEL__ -I$(LINUX_HEADERS)/include
-CRTOBJS		= ../gnuefi/crt0-efi-$(ARCH).o
+rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
 
-LDSCRIPT	= $(TOPDIR)/gnuefi/elf_$(ARCH)_efi.lds
-ifneq (,$(findstring FreeBSD,$(OS)))
-LDSCRIPT	= $(TOPDIR)/gnuefi/elf_$(ARCH)_fbsd_efi.lds
-endif
+SRC = $(call rwildcard,$(SRCDIR),*.cpp)  
+ASMSRC = $(call rwildcard,$(SRCDIR),*.asm)  
+OBJS = $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.o, $(SRC))
+OBJS += $(patsubst $(SRCDIR)/%.asm, $(OBJDIR)/%_asm.o, $(ASMSRC))
+DIRS = $(wildcard $(SRCDIR)/*)
 
-LDFLAGS		+= -shared -Bsymbolic -L../lib -L../gnuefi $(CRTOBJS)
+kernel: $(OBJS) link
 
-LOADLIBES	+= -lefi -lgnuefi
-LOADLIBES	+= $(LIBGCC)
-LOADLIBES	+= -T $(LDSCRIPT)
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
+	@ echo ------- COMPILING C++ ------- $^
+	@ mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $^ -o $@
+	
+$(OBJDIR)/%_asm.o: $(SRCDIR)/%.asm
+	@ echo ------- COMPILING ASM ------- $^
+	@ mkdir -p $(@D)
+	$(ASMC) $(ASMFLAGS) $^ -f elf64 -o $@
+	 
+link:
+	@ echo ---------- LINKING ----------
+	$(LD) $(LDFLAGS) -o $(BUILDDIR)/kernel.elf $(OBJS)
 
-TARGET_APPS = main.efi
-TARGET_BSDRIVERS =
-TARGET_RTDRIVERS =
+setup:
+	@mkdir $(BUILDDIR)
+	@mkdir $(SRCDIR)
+	@mkdir $(OBJDIR)
 
-ifneq ($(HAVE_EFI_OBJCOPY),)
+buildimg:
+	dd if=/dev/zero of=$(BUILDDIR)/$(OSNAME).img bs=512 count=93750
+	mformat -i $(BUILDDIR)/$(OSNAME).img -f 1440 ::
+	mmd -i $(BUILDDIR)/$(OSNAME).img ::/EFI
+	mmd -i $(BUILDDIR)/$(OSNAME).img ::/EFI/BOOT
+	mcopy -i $(BUILDDIR)/$(OSNAME).img $(BOOTEFI) ::/EFI/BOOT
+	mcopy -i $(BUILDDIR)/$(OSNAME).img startup.nsh ::
+	mcopy -i $(BUILDDIR)/$(OSNAME).img $(BUILDDIR)/kernel.elf ::
+	mcopy -i $(BUILDDIR)/$(OSNAME).img $(BUILDDIR)/zap-light20.psf ::
 
-FORMAT		:= --target efi-app-$(ARCH)
-$(TARGET_BSDRIVERS): FORMAT=--target efi-bsdrv-$(ARCH)
-$(TARGET_RTDRIVERS): FORMAT=--target efi-rtdrv-$(ARCH)
-
-else
-
-SUBSYSTEM	:= 0xa
-$(TARGET_BSDRIVERS): SUBSYSTEM = 0xb
-$(TARGET_RTDRIVERS): SUBSYSTEM = 0xc
-
-FORMAT		:= -O binary
-LDFLAGS		+= --defsym=EFI_SUBSYSTEM=$(SUBSYSTEM)
-
-endif
-
-TARGETS = $(TARGET_APPS) $(TARGET_BSDRIVERS) $(TARGET_RTDRIVERS)
-
-CFLAGS += -Wno-error=unused-parameter -Wno-error=unused-variable
-
-all:	$(TARGETS)
-
-clean:
-	rm -f $(TARGETS) *~ *.o *.so
-
-.PHONY: install
-
-include $(SRCDIR)/../Make.rules
+run:
+	qemu-system-x86_64 -drive file=$(BUILDDIR)/$(OSNAME).img -m 256M -cpu qemu64 -drive if=pflash,format=raw,unit=0,file="$(OVMFDIR)/OVMF_CODE-pure-efi.fd",readonly=on -drive if=pflash,format=raw,unit=1,file="$(OVMFDIR)/OVMF_VARS-pure-efi.fd" -net none
